@@ -94,8 +94,8 @@ const Sound = (() => {
     if (track.song) return playSong(track, voice);
     const c = context(), S = parse(track), t0 = c.currentTime + 0.1, b = bus(c, t0), out = b.out;
     const backing = c.createGain(), guide = c.createGain();
-    backing.gain.value = reference ? 0.55 : 0.85;
-    guide.gain.value = voice ? 1 : 0;
+    backing.gain.value = reference ? 0.35 : 0.85;
+    guide.gain.value = voice ? (reference ? 1.6 : 1) : 0;
     backing.connect(out);
     guide.connect(out);
 
