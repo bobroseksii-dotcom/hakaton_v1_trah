@@ -10,21 +10,26 @@ const I = (() => {
     play: s('<path d="M7 4.5v15l12.5-7.5z" fill="currentColor"/>'),
     pause: s('<path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/>'),
     stop: s('<rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/>'),
+    flag: s('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'),
+    close: s('<path d="M6 6l12 12M18 6 6 18"/>'),
     retry: s('<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/>'),
     crown: s('<path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/>'),
     headphones: s('<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/>'),
     chevron: s('<path d="m6 9 6 6 6-6"/>'),
+    plus: s('<path d="M12 5v14M5 12h14"/>'),
+    trash: s('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
+    upload: s('<path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/>'),
     logo: s('<path d="M9 18V5l10-2v12"/><circle cx="6.5" cy="18" r="2.5" fill="currentColor"/><circle cx="16.5" cy="15" r="2.5" fill="currentColor"/>')
   };
 })();
 
-const KEY = 'karaoke-battle';
+const KEY = 'karaoke-battle-v2';
 const LEVELS = ['', 'Легко', 'Средне', 'Сложно'];
 const PALETTE = ['#1ec468', '#f0468c', '#a855f7', '#e8b10b', '#38bdf8', '#ff7a59'];
 const SEED = [
-  ['Лиза', 'volna', 88, 82], ['Анна К.', 'plamya', 86, 80, 'duel'], ['Даша', 'sneg', 84, 79],
-  ['Макс', 'neon', 79, 76], ['Анна К.', 'neon', 74, 81], ['Кира', 'puls', 63, 69, 'duel'],
-  ['Тимур', 'polnoch', 58, 67], ['Макс', 'plamya', 69, 72]
+  ['Лиза', 'volna', 88, 82], ['Анна К.', 'neon', 86, 80, 'duel'], ['Даша', 'volna', 84, 79],
+  ['Макс', 'neon', 79, 76], ['Анна К.', 'puls', 70, 74], ['Кира', 'puls', 63, 69, 'duel'],
+  ['Тимур', 'puls', 58, 67], ['Макс', 'volna', 69, 72]
 ];
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -32,9 +37,10 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const view = $('#view');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const byId = id => TRACKS.find(t => t.id === id);
+const LIST = [...TRACKS];
+const byId = id => LIST.find(t => t.id === id);
 const grad = t => `--a:${t.colors[0]};--b:${t.colors[1]}`;
-const badge = t => `<span class="badge lv${t.level}">${LEVELS[t.level]}</span>`;
+const badge = t => `<span class="badge lv${t.level}">${t.level ? LEVELS[t.level] : 'Новая'}</span>`;
 const hue = name => PALETTE[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % PALETTE.length];
 const avatar = (name, cls = '') => `<span class="avatar ${cls}" style="--c:${hue(name)}">${esc((name[0] || '?').toUpperCase())}</span>`;
 
@@ -63,7 +69,7 @@ const bestOf = (id, name = db.name) => {
   return list.length ? Math.max(...list) : null;
 };
 
-const state = { q: '', level: 0, top: 'all', guide: true, pick: TRACKS[0].id, p2: 'Соперник', duel: null, session: null, raf: 0, sound: null, rec: null, last: null, redraw: null };
+const state = { q: '', level: 0, top: 'all', guide: true, songVoice: false, pick: TRACKS[0].id, p2: 'Соперник', duel: null, session: null, raf: 0, sound: null, rec: null, last: null, redraw: null };
 
 const io = window.IntersectionObserver && new IntersectionObserver(
   es => es.forEach(e => e.isIntersecting && (e.target.classList.add('in'), io.unobserve(e.target))),
@@ -97,9 +103,12 @@ function micError(e) {
 }
 
 function cover(t) {
-  const S = Sound.parse(t), span = S.duration - S.intro, rng = S.hi - S.lo || 1;
+  if (t.cover) return `<img src="${esc(t.cover)}" alt="" loading="lazy" onerror="this.remove()">`;
+  const S = Sound.parse(t);
+  if (!S) return `<span class="cover-letter">${esc((t.title[0] || '♪').toUpperCase())}</span>`;
+  const t0 = S.notes[0].t, span = S.notes.at(-1).t + S.notes.at(-1).d - t0, rng = S.hi - S.lo || 1;
   const bars = S.notes.map(n =>
-    `<rect x="${(8 + ((n.t - S.intro) / span) * 84).toFixed(1)}" y="${(56 - ((n.midi - S.lo) / rng) * 38).toFixed(1)}" width="${Math.max(1.4, (n.d / span) * 84 - 0.8).toFixed(1)}" height="3.4" rx="1.7"/>`
+    `<rect x="${(8 + ((n.t - t0) / span) * 84).toFixed(1)}" y="${(56 - ((n.midi - S.lo) / rng) * 38).toFixed(1)}" width="${Math.max(1.4, (n.d / span) * 84 - 0.8).toFixed(1)}" height="3.4" rx="1.7"/>`
   ).join('');
   return `<svg viewBox="0 0 100 75" aria-hidden="true"><g fill="#fff">${bars}</g></svg>`;
 }
@@ -107,9 +116,9 @@ function cover(t) {
 function card(t, i) {
   const best = bestOf(t.id);
   return `<a class="card" href="#/sing/${t.id}" data-reveal style="${grad(t)};--i:${i}">
-    <div class="cover">${cover(t)}<span class="play">${I.play}</span></div>
+    <div class="cover">${cover(t)}${t.song ? '<span class="cover-tag">Песня</span>' : ''}<span class="play">${I.play}</span></div>
     <div class="card-body">
-      <b>${t.title}</b><span>${t.artist}</span>
+      <b>${esc(t.title)}</b><span>${esc(t.artist)}</span>
       <div class="card-meta">${badge(t)}${best !== null ? `<span class="best">Рекорд ${best}</span>` : ''}</div>
     </div>
   </a>`;
@@ -163,7 +172,7 @@ function drawRoll(g, S, o) {
     c.beginPath();
     c.roundRect(x + 1, Y(n.midi) - bh / 2, Math.max(4, x2 - x - 2), bh, bh / 2);
     c.fill();
-    if (o.labels && c.measureText(n.syl).width < x2 - x + 4) {
+    if (o.labels && n.syl && c.measureText(n.syl).width < x2 - x + 4) {
       c.shadowBlur = 0;
       c.fillStyle = active ? '#fff' : 'rgba(255,255,255,.42)';
       c.fillText(n.syl, x + 2, Y(n.midi) - bh / 2 - 4);
@@ -246,15 +255,16 @@ function viewHome() {
       </div>
     </div>
     <ol class="steps">
-      <li><b>Выбери фрагмент</b><span>Шесть треков трёх уровней сложности</span></li>
+      <li><b>Выбери песню</b><span>Встроенный трек или своя песня с минусом и плюсом</span></li>
       <li><b>Пой в микрофон</b><span>Подсказка покажет, брать выше или ниже</span></li>
       <li><b>Получи разбор</b><span>Баллы за мелодию и ритм и советы, что подтянуть</span></li>
     </ol>
   </section>
   <section>
     <div class="sec-head"><h2>Фрагменты</h2><a href="#/tracks">Все подборки</a></div>
-    <div class="grid">${TRACKS.map(card).join('')}</div>
-  </section>`);
+    <div class="grid">${LIST.map(card).join('')}</div>
+  </section>
+  ${HOW}`);
 
   const S = Sound.parse(byId('neon')), len = S.duration - S.intro, g = fit($('#heroRoll'));
   const frame = () => {
@@ -267,15 +277,20 @@ function viewHome() {
 
 function viewTracks(animate = true) {
   const q = state.q.trim().toLowerCase();
-  const list = TRACKS.filter(t => (!state.level || t.level === state.level) && (!q || `${t.title} ${t.artist}`.toLowerCase().includes(q)));
+  const fits = t => state.level === 4 ? t.song : !state.level || t.level === state.level;
+  const list = LIST.filter(t => fits(t) && (!q || `${t.title} ${t.artist}`.toLowerCase().includes(q)));
   render(`
   <section>
-    <h1>Подборки</h1>
-    <p class="lead">Шесть фрагментов трёх уровней. Начни с лёгких, чтобы распеться.</p>
-    <div class="chips">${['Все', ...LEVELS.slice(1)].map((l, i) => `<button class="chip${state.level === i ? ' on' : ''}" data-l="${i}">${l}</button>`).join('')}</div>
+    <div class="page-head">
+      <div><h1>Подборки</h1><p class="lead">Встроенные треки трёх уровней и твои песни. Начни с лёгких, чтобы распеться.</p></div>
+      <button class="btn btn-sing" data-add>${I.upload}Добавить песню</button>
+    </div>
+    <div class="chips">${['Все', ...LEVELS.slice(1), 'Мои песни'].map((l, i) => `<button class="chip${state.level === i ? ' on' : ''}" data-l="${i}">${l}</button>`).join('')}</div>
     ${list.length
       ? `<div class="grid">${list.map(card).join('')}</div>`
-      : `<div class="empty"><p>По запросу «${esc(state.q)}» ничего не нашлось. Попробуй название трека или исполнителя.</p></div>`}
+      : state.level === 4 && !q
+        ? `<div class="empty"><p>Своих песен пока нет. Загрузи минус и плюс, а ноты, темп и текст сайт найдёт сам.</p><button class="btn btn-sing" data-add>${I.upload}Добавить песню</button></div>`
+        : `<div class="empty"><p>По запросу «${esc(state.q)}» ничего не нашлось. Попробуй название трека или исполнителя.</p></div>`}
   </section>`, animate);
   $$('[data-l]').forEach(b => (b.onclick = () => {
     state.level = +b.dataset.l;
@@ -283,61 +298,156 @@ function viewTracks(animate = true) {
   }));
 }
 
+const span = (text, a, b) => `<span class="s" data-a="${a.toFixed(2)}" data-b="${Math.max(b, a + 0.05).toFixed(2)}">${esc(text)}</span>`;
+
 function showLine(S, i) {
-  const l = S.lines[i];
-  $('#lineNow').innerHTML = l.words.map(w => w.map(s => `<span class="s" data-n="${s.n}">${esc(s.text)}</span>`).join('')).join(' ');
-  $('#lineNext').textContent = S.lines[i + 1]?.text || '';
+  const l = S.lines[i], now = $('#lineNow'), next = $('#lineNext');
+  if (!l) {
+    now.innerHTML = '';
+    next.textContent = S.lines.length ? '' : 'Текста нет: пой мелодию по нотам';
+    return;
+  }
+  if (l.words) {
+    now.innerHTML = l.words.map(w => w.map(s => span(s.text, S.notes[s.n].t, S.notes[s.n].t + S.notes[s.n].d)).join('')).join(' ');
+  } else {
+    const own = S.notes.filter(n => n.line === i), end = Math.min(l.t1 - 0.1, own.length ? own.at(-1).t + own.at(-1).d : l.t1 - 0.3);
+    const words = l.text.split(/\s+/), total = words.reduce((a, w) => a + w.length + 1, 0), len = Math.max(0.3, end - l.t0);
+    let acc = 0;
+    now.innerHTML = words.map(w => {
+      const a = l.t0 + (len * acc) / total;
+      acc += w.length + 1;
+      return span(w, a, l.t0 + (len * acc) / total);
+    }).join(' ');
+  }
+  next.textContent = S.lines[i + 1]?.text || '';
 }
+
+const voiceKey = t => (t.song ? 'songVoice' : 'guide');
 
 function viewSing(t, duelInfo) {
   state.last = t.id;
-  const S = Sound.parse(t);
   render(`
   ${duelInfo
     ? `<div class="duel-banner p${duelInfo.turn + 1}">${avatar(duelInfo.name)}<span>Дуэль, ход ${duelInfo.turn + 1} из 2. Поёт <b>${esc(duelInfo.name)}</b></span></div>`
-    : `<nav class="chips scroll">${TRACKS.map(x => `<a class="chip${x === t ? ' on' : ''}" href="#/sing/${x.id}">${x.title}</a>`).join('')}</nav>`}
+    : `<nav class="chips scroll">${LIST.map(x => `<a class="chip${x === t ? ' on' : ''}" href="#/sing/${x.id}">${esc(x.title)}</a>`).join('')}</nav>`}
   <div class="stage-head" style="${grad(t)}">
     <div class="mini-cover">${cover(t)}</div>
     <div class="stage-title">
-      <h1>${t.title}</h1>
-      <div class="meta"><span>${t.artist}</span>${badge(t)}<span>${t.bpm} BPM</span></div>
+      <h1>${esc(t.title)}</h1>
+      <div class="meta" id="meta"></div>
     </div>
-    <label class="switch"><input type="checkbox" id="guide"${state.guide ? ' checked' : ''}><span></span>Подсказка мелодии</label>
+    <div class="stage-tools">
+      ${!t.song || t.hasMinus ? `<label class="switch"><input type="checkbox" id="guide"${state[voiceKey(t)] ? ' checked' : ''}><span></span>${t.song ? 'Голос исполнителя' : 'Подсказка мелодии'}</label>` : ''}
+      ${t.origin === 'local' ? `<button class="icon-btn" id="del" type="button" aria-label="Удалить песню" title="Удалить песню">${I.trash}</button>` : ''}
+    </div>
   </div>
   <div class="stage">
     <canvas id="roll"></canvas>
-    <div class="hud"><span id="hudNote">Готов?</span><span id="hudHint"></span><span id="hudHits">0 из ${S.notes.length} нот</span></div>
+    <div class="hud"><span id="hudNote">Готов?</span><span id="hudHint"></span><span id="hudHits"></span></div>
     <div class="count" id="count"></div>
+    <div class="prep" id="prep" hidden><b id="prepText">Готовлю трек</b><div class="bar"><i id="prepBar"></i></div><span>Первый раз это займёт несколько секунд</span></div>
   </div>
   <div class="lyrics"><p class="line" id="lineNow"></p><p class="line next" id="lineNext"></p></div>
   <div class="controls">
     <button class="btn btn-ghost" id="listen">${I.headphones}<span>Послушать эталон</span></button>
-    <button class="mic" id="mic" aria-label="Петь">${I.mic}</button>
-    <p class="hint">Пой в наушниках, тогда микрофон слышит только тебя</p>
+    <div class="mic-wrap"><button class="mic" id="mic" aria-label="Петь">${I.mic}</button><span class="mic-cap" id="micCap">Петь</span></div>
+    <div class="side-ctl">
+      <p class="hint" id="hint">${t.song ? 'Пой под минус. Голос исполнителя можно включить для подсказки' : 'Пой в наушниках, тогда микрофон слышит только тебя'}</p>
+      <button class="btn btn-ghost btn-sm" id="cancel" type="button" hidden>${I.close}Отменить без оценки</button>
+    </div>
   </div>`);
 
   const g = fit($('#roll'));
-  const idle = () => {
+  const ready = () => {
+    const S = Sound.parse(t);
+    if (t.song && !t.hasMinus) $('.switch')?.remove();
+    $('#meta').innerHTML = `<span>${esc(t.artist)}</span>${badge(t)}<span>${t.song ? '≈ ' : ''}${t.bpm} BPM</span>${S.approx ? '<span class="pill-mini">эталон приблизительный</span>' : ''}`;
+    $('.mini-cover').innerHTML = cover(t);
+    setText($('#hudHits'), `0 из ${S.notes.length} нот`);
     showLine(S, 0);
     drawRoll(g, S, { ...around(g, S.intro - 0.01), labels: true, head: true });
   };
-  idle();
-  state.redraw = () => !state.session && idle();
-  $('#guide').onchange = e => (state.guide = e.target.checked);
-  $('#mic').onclick = () => (state.session ? endSession(true) : startSession(t, duelInfo));
-  $('#listen').onclick = () => (state.session ? endSession(true) : startSession(t, duelInfo, true));
+  state.redraw = () => !state.session && Sound.parse(t) && ready();
+  $('#guide') && ($('#guide').onchange = e => {
+    state[voiceKey(t)] = e.target.checked;
+    state.session?.player.setVoice(e.target.checked);
+  });
+  $('#del') && ($('#del').onclick = async () => {
+    if (!confirm(`Удалить «${t.title}» из этого браузера?`)) return;
+    await Songs.remove(t);
+    LIST.splice(LIST.indexOf(t), 1);
+    toast(`Песня «${t.title}» удалена`);
+    location.hash = '#/tracks';
+  });
+  $('#mic').onclick = () => {
+    const ses = state.session;
+    if (!ses) return startSession(t, duelInfo);
+    ses.demo ? endSession(true) : endSession(false, true);
+  };
+  $('#listen').onclick = () => {
+    const ses = state.session;
+    if (!ses) return startSession(t, duelInfo, true);
+    ses.demo ? endSession(true) : togglePause();
+  };
+  $('#cancel').onclick = () => endSession(true);
+
+  if (t.song && !(t._s && t._buf)) {
+    const box = $('#prep'), buttons = [$('#mic'), $('#listen')];
+    box.hidden = false;
+    $('#meta').innerHTML = `<span>${esc(t.artist)}</span>`;
+    buttons.forEach(b => (b.disabled = true));
+    Songs.prepare(t, (text, p) => {
+      if (!box.isConnected) return;
+      setText($('#prepText'), text);
+      $('#prepBar').style.width = `${Math.round(p * 100)}%`;
+    }).then(() => {
+      if (!box.isConnected) return;
+      box.hidden = true;
+      buttons.forEach(b => (b.disabled = false));
+      ready();
+    }).catch(e => {
+      if (!box.isConnected) return;
+      setText($('#prepText'), e.message || 'Не получилось подготовить трек');
+      $('#prepBar').style.width = '0';
+      toast(location.protocol === 'file:' && t.origin === 'music'
+        ? 'Песни из папки music открываются только на GitHub Pages или через Live Server.'
+        : e.message || 'Не получилось подготовить трек');
+    });
+  } else ready();
 }
 
-function setStageLive(on, demo) {
+function setStageLive(on, demo, paused = false) {
   const mic = $('#mic');
   if (!mic) return;
-  mic.classList.toggle('live', on && !demo);
-  mic.innerHTML = on ? I.stop : I.mic;
-  mic.setAttribute('aria-label', on ? 'Остановить' : 'Петь');
+  const singing = on && !demo;
+  mic.classList.toggle('live', singing && !paused);
+  mic.innerHTML = singing ? I.flag : on ? I.stop : I.mic;
+  mic.setAttribute('aria-label', singing ? 'Завершить и получить оценку' : on ? 'Остановить' : 'Петь');
+  mic.title = singing ? 'Завершить и получить оценку' : '';
+  $('#micCap').textContent = singing ? 'Завершить' : on ? 'Стоп' : 'Петь';
   mic.style.setProperty('--lvl', 0);
-  $('#listen').innerHTML = on && demo ? `${I.stop}<span>Остановить</span>` : `${I.headphones}<span>Послушать эталон</span>`;
-  $('#guide').disabled = on;
-  $('.stage').classList.toggle('on', on);
+  $('#listen').innerHTML = singing
+    ? paused ? `${I.play}<span>Продолжить</span>` : `${I.pause}<span>Пауза</span>`
+    : on ? `${I.stop}<span>Остановить</span>` : `${I.headphones}<span>Послушать эталон</span>`;
+  $('#cancel').hidden = !singing;
+  $('#hint').hidden = singing;
+  $('.stage').classList.toggle('on', on && !paused);
+  $('.stage').classList.toggle('paused', paused);
+}
+
+async function togglePause() {
+  const ses = state.session;
+  if (!ses || ses.demo || ses.busy) return;
+  ses.busy = true;
+  ses.paused = !ses.paused;
+  setStageLive(true, false, ses.paused);
+  const el = $('#count');
+  el.classList.remove('pop');
+  el.classList.toggle('hold', ses.paused);
+  el.textContent = ses.paused ? 'Пауза' : '';
+  ses.hist = [];
+  await Sound.pause(ses.paused);
+  ses.busy = false;
 }
 
 const setText = (el, text, cls) => {
@@ -355,11 +465,12 @@ async function startSession(t, duelInfo, demo = false) {
     }
   }
   const S = Sound.parse(t), c = Sound.context(), lat = Sound.latency();
-  const player = Sound.play(t, { guide: demo || state.guide });
+  const player = Sound.play(t, { voice: demo || state[voiceKey(t)], reference: demo });
   if (!demo) Sound.recStart();
+  Sound.setGate(0);
   const ses = (state.session = {
-    t, S, player, demo, duelInfo, raf: 0, line: 0, label: '',
-    samples: [], live: S.notes.map(() => [0, 0]), g: fit($('#roll')), spans: $$('#lineNow .s')
+    t, S, player, demo, duelInfo, raf: 0, line: -1, label: '', spans: [],
+    samples: [], live: S.notes.map(() => [0, 0]), g: fit($('#roll')), hist: [], noise: [], gated: false
   });
   const hud = { note: $('#hudNote'), hint: $('#hudHint'), hits: $('#hudHits'), mic: $('#mic') };
   setStageLive(true, demo);
@@ -368,24 +479,37 @@ async function startSession(t, duelInfo, demo = false) {
 
   const tick = () => {
     if (state.session !== ses) return;
+    if (ses.paused) {
+      ses.raf = requestAnimationFrame(tick);
+      return;
+    }
     const now = c.currentTime - player.t0, ts = now - lat;
     let cur = null;
     if (!demo) {
       const p = Sound.pitch();
       hud.mic.style.setProperty('--lvl', Math.min(1, p.rms * 8).toFixed(2));
+      if (now > 0.15 && now < S.intro - 0.3) ses.noise.push(p.rms);
+      else if (!ses.gated && now >= S.intro - 0.3) {
+        ses.gated = true;
+        const q = ses.noise.sort((a, b) => a - b);
+        if (q.length > 10) Sound.setGate(q[q.length >> 1] * 2.2);
+      }
+      ses.hist.push(p.m);
+      if (ses.hist.length > 3) ses.hist.shift();
+      const v = ses.hist.filter(x => x != null).sort((a, b) => a - b);
+      cur = v.length === 3 ? v[1] : v.length === 2 && Math.abs(v[0] - v[1]) < 1 ? (v[0] + v[1]) / 2 : null;
       if (ts >= 0) {
-        cur = p.m;
         ses.samples.push({ t: ts, m: cur });
         const ni = S.notes.findIndex(n => ts >= n.t && ts < n.t + n.d);
         const d = ni >= 0 && cur != null ? fold(cur - S.notes[ni].midi) : null;
         if (ni >= 0) {
           ses.live[ni][0]++;
-          if (d !== null && Math.abs(d) <= 0.75) ses.live[ni][1]++;
+          if (d !== null && Math.abs(d) <= 0.8) ses.live[ni][1]++;
         }
         setText(hud.note, cur != null ? `♪ ${Sound.noteName(cur)}` : '—');
         if (ni < 0) setText(hud.hint, '', '');
         else if (d === null) setText(hud.hint, 'Пой!', 'go');
-        else if (Math.abs(d) <= 0.5) setText(hud.hint, 'В ноту', 'ok');
+        else if (Math.abs(d) <= 0.6) setText(hud.hint, 'В ноту', 'ok');
         else setText(hud.hint, d < 0 ? 'Выше ↑' : 'Ниже ↓', 'warn');
       }
     }
@@ -407,18 +531,19 @@ function lyricsTick(ses, now) {
   if (li !== ses.line) {
     ses.line = li;
     showLine(S, li);
-    ses.spans = $$('#lineNow .s');
+    ses.spans = $$('#lineNow .s').map(el => ({ el, a: +el.dataset.a, b: +el.dataset.b }));
   }
-  ses.spans.forEach(sp => {
-    const n = S.notes[sp.dataset.n], p = clamp((now - n.t) / n.d, 0, 1);
-    sp.style.setProperty('--p', `${(p * 100).toFixed(1)}%`);
-    sp.classList.toggle('done', p >= 1);
+  ses.spans.forEach(({ el, a, b }) => {
+    const p = clamp((now - a) / (b - a), 0, 1);
+    el.style.setProperty('--p', `${(p * 100).toFixed(1)}%`);
+    el.classList.toggle('done', p >= 1);
   });
 }
 
 function countTick(ses, now) {
-  const S = ses.S;
-  const label = now < 0 ? '' : now < S.intro ? String(4 - Math.floor(now / S.beat)) : now < S.intro + 0.6 ? (ses.demo ? 'Слушай' : 'Пой!') : '';
+  const S = ses.S, left = S.intro - now;
+  const label = now < 0 ? '' : left > 0 && left <= 4 * S.beat ? String(Math.ceil(left / S.beat - 0.001))
+    : left <= 0 && left > -0.6 ? (ses.demo ? 'Слушай' : 'Пой!') : '';
   if (label === ses.label) return;
   ses.label = label;
   const el = $('#count');
@@ -429,15 +554,19 @@ function countTick(ses, now) {
   el.classList.add('pop');
 }
 
-async function endSession(cancel) {
+async function endSession(cancel, finish = false) {
   const ses = state.session;
   if (!ses) return;
   state.session = null;
   cancelAnimationFrame(ses.raf);
+  if (ses.paused) await Sound.pause(false);
+  $('#count')?.classList.remove('hold');
   ses.player.stop();
   const blob = ses.demo ? null : await Sound.recStop();
+  const res = cancel || ses.demo ? null : scoreTake(ses.t, ses.samples, finish ? ses.samples.at(-1)?.t ?? 0 : Infinity);
+  if (!cancel && !ses.demo && !res) toast('Спой хотя бы пару строчек, чтобы получить оценку.');
 
-  if (cancel || ses.demo) {
+  if (!res) {
     setStageLive(false);
     if ($('#hudNote')) {
       setText($('#hudNote'), 'Готов?');
@@ -448,10 +577,12 @@ async function endSession(cancel) {
     return;
   }
 
-  const res = scoreTake(ses.t, ses.samples);
   const name = ses.duelInfo?.name || db.name;
   const prev = bestOf(ses.t.id, name);
-  if (!res.silent) addScore({ name, track: ses.t.id, total: res.total, melody: res.melody, rhythm: res.rhythm, mode: ses.duelInfo ? 'duel' : 'solo', date: Date.now() });
+  if (!res.silent) addScore({
+    name, track: ses.t.id, total: res.total, melody: res.melody, rhythm: res.rhythm,
+    mode: ses.duelInfo ? 'duel' : 'solo', date: Date.now(), ...(res.part < 1 && { part: Math.round(res.part * 100) })
+  });
   if (state.rec) URL.revokeObjectURL(state.rec);
   state.rec = blob?.size ? URL.createObjectURL(blob) : null;
   ses.duelInfo ? duelNext(res) : viewResult(ses.t, res, prev);
@@ -556,14 +687,17 @@ function viewResult(t, res, prev) {
       <div class="result-title">
         <span class="grade g${res.grade}">${res.grade}</span>
         <h1>${res.title}</h1>
-        <p class="lead">${t.title}, ${t.artist}</p>
-        ${record ? `<span class="pill gold">${I.crown}Новый рекорд, было ${prev}</span>`
-          : prev !== null ? `<span class="pill">Твой рекорд на треке ${prev}</span>` : ''}
+        <p class="lead">${esc(t.title)}, ${esc(t.artist)}</p>
+        <div class="pills">
+          ${record ? `<span class="pill gold">${I.crown}Новый рекорд, было ${prev}</span>`
+            : prev !== null ? `<span class="pill">Твой рекорд на треке ${prev}</span>` : ''}
+          ${res.part < 1 ? `<span class="pill warn">${I.flag}Спето ${Math.round(res.part * 100)}% песни</span>` : ''}
+        </div>
       </div>
     </div>
     <div class="meters">
-      ${meter('Мелодия', res.melody, `${res.hits} из ${res.notes} нот спето точно`)}
-      ${meter('Ритм', res.rhythm, `${res.onTime} из ${res.notes} нот начато вовремя`, 'rhythm')}
+      ${meter('Мелодия', res.melody, `${res.hits} из ${res.notes} ${res.part < 1 ? 'спетых ' : ''}нот попал точно`)}
+      ${meter('Ритм', res.rhythm, `${res.onTime} из ${res.notes} ${res.part < 1 ? 'спетых ' : ''}нот начал вовремя`, 'rhythm')}
     </div>
     <div class="panel">
       <div class="panel-head">
@@ -582,7 +716,7 @@ function viewResult(t, res, prev) {
   </section>`);
 
   const g = fit($('#cmp'));
-  state.redraw = () => drawRoll(g, S, { from: S.intro - 0.4, to: S.duration, now: Infinity, samples: res.samples, live: res.live });
+  state.redraw = () => drawRoll(g, S, { from: S.intro - 0.4, to: S.duration, now: res.until, samples: res.samples, live: res.live });
   state.redraw();
   countUp();
   if (record || res.total >= 750) confetti();
@@ -609,8 +743,8 @@ function viewDuel() {
       <label class="pl p2"><span>Игрок 2</span><input id="p2" maxlength="18" value="${esc(state.p2)}"></label>
     </div>
     <h2 class="sub-h">Трек для баттла</h2>
-    <div class="pick">${TRACKS.map(t => `<button class="${t.id === state.pick ? 'on' : ''}" data-id="${t.id}" style="${grad(t)}">
-      <span class="mini">${cover(t)}</span><b>${t.title}</b>${badge(t)}</button>`).join('')}</div>
+    <div class="pick">${LIST.map(t => `<button class="${t.id === state.pick ? 'on' : ''}" data-id="${t.id}" style="${grad(t)}">
+      <span class="mini">${cover(t)}</span><b>${esc(t.title)}</b>${badge(t)}</button>`).join('')}</div>
     <button class="btn btn-sing btn-lg" id="go">${I.swords}Начать баттл</button>
   </section>`);
   $$('.pick button').forEach(b => (b.onclick = () => {
@@ -621,7 +755,7 @@ function viewDuel() {
     const names = [$('#p1').value.trim() || 'Игрок 1', $('#p2').value.trim() || 'Игрок 2'];
     if (names[0] === names[1]) names[1] += ' 2';
     state.p2 = names[1];
-    state.duel = { t: byId(state.pick), names, turn: 0, res: [] };
+    state.duel = { t: byId(state.pick) || LIST[0], names, turn: 0, res: [] };
     duelTurn();
   };
 }
@@ -665,6 +799,7 @@ function viewVersus() {
       ${avatar(d.names[i], 'lg')}<b class="nm">${esc(d.names[i])}</b>
       <b class="big" data-count="${r.total}">0</b><small>баллов</small>
       <div class="duo"><span>Мелодия<b>${r.melody}%</b></span><span>Ритм<b>${r.rhythm}%</b></span></div>
+      ${r.part < 1 ? `<small class="part">спето ${Math.round(r.part * 100)}% песни</small>` : ''}
     </div>`;
   };
   let why = 'Счёт равный, нужен реванш.';
@@ -675,7 +810,7 @@ function viewVersus() {
   }
   render(`
   <section>
-    <p class="kicker">${d.t.title}, ${LEVELS[d.t.level].toLowerCase()}</p>
+    <p class="kicker">${esc(d.t.title)}, ${esc(d.t.artist)}</p>
     <h1>${w < 0 ? 'Ничья' : `Побеждает ${esc(d.names[w])}`}</h1>
     <p class="lead">${why}</p>
     <div class="versus">${side(0)}<b class="vs">VS</b>${side(1)}</div>
@@ -699,13 +834,13 @@ function viewVersus() {
 
 function viewTop(animate = true) {
   const f = state.top, me = db.name, best = new Map();
-  db.scores.filter(s => f === 'all' || s.track === f).forEach(s => {
+  db.scores.filter(s => byId(s.track) && (f === 'all' || s.track === f)).forEach(s => {
     const b = best.get(s.name);
     if (!b || s.total > b.total) best.set(s.name, s);
   });
   const list = [...best.values()].sort((a, b) => b.total - a.total);
   const place = list.findIndex(s => s.name === me) + 1;
-  const sub = s => `${byId(s.track)?.title || ''}${s.mode === 'duel' ? ', дуэль' : ''}`;
+  const sub = s => `${esc(byId(s.track)?.title || '')}${s.mode === 'duel' ? ', дуэль' : ''}${s.part ? `, ${s.part}% песни` : ''}`;
   const pod = i => {
     const s = list[i];
     if (!s) return '<div></div>';
@@ -718,7 +853,7 @@ function viewTop(animate = true) {
     <p class="kicker">Бейся за первое место</p>
     <h1>Таблица лидеров</h1>
     <p class="lead">Сравнивай результаты и попробуй подняться выше. Собери максимум баллов.</p>
-    <div class="chips">${[['all', 'Все треки'], ...TRACKS.map(t => [t.id, t.title])].map(([id, l]) =>
+    <div class="chips">${[['all', 'Все треки'], ...LIST.map(t => [t.id, esc(t.title)])].map(([id, l]) =>
       `<button class="chip${f === id ? ' on' : ''}" data-f="${id}">${l}</button>`).join('')}</div>
     ${place ? `<p class="me-place">${avatar(me)}<span>${esc(me)}, ты на ${place}-м месте из ${list.length}</span></p>` : ''}
     ${list.length
@@ -735,6 +870,24 @@ function viewTop(animate = true) {
     viewTop(false);
   }));
 }
+
+const HOW = `
+  <section class="how">
+    <div class="sec-head"><h2>Как это работает</h2></div>
+    <ol class="how-list">
+      <li data-reveal style="--i:0"><b>Слушаем голос</b><p>Пока ты поёшь, сайт 60 раз в секунду определяет, какую ноту ты берёшь. Запись остаётся в твоём браузере и никуда не отправляется.</p></li>
+      <li data-reveal style="--i:1"><b>Сравниваем с оригиналом</b><p>У каждой песни есть эталон: ноты исполнителя. Мы проверяем, попадаешь ли ты в них. Петь можно в своей октаве, низкий и высокий голос оцениваются одинаково.</p></li>
+      <li data-reveal style="--i:2"><b>Считаем баллы</b><p>За точные ноты дают до 600 баллов, за ритм до 400. Попал почти в ноту, значит засчитано. Вступил вовремя и дотянул до конца, значит получил очки за ритм.</p></li>
+      <li data-reveal style="--i:3"><b>Объясняем результат</b><p>Показываем, где голос уходил выше или ниже, где ты опаздывал и какую строчку стоит повторить. А потом можно позвать друга на дуэль.</p></li>
+    </ol>
+    <div class="how-note" data-reveal>
+      <div>
+        <b>Своя песня за минуту</b>
+        <p>Загрузи минус и плюс. Сайт вычтет музыку из песни, получит чистый голос исполнителя и сам найдёт по нему ноты, темп и сложность. Текст подтянется из открытой базы текстов с таймингом.</p>
+      </div>
+      <button class="btn btn-ghost" data-add>${I.upload}Добавить песню</button>
+    </div>
+  </section>`;
 
 const ROUTES = {
   home: viewHome,
@@ -774,6 +927,7 @@ $('#search').addEventListener('input', e => {
 
 $('#user').onclick = () => {
   $('#nameInput').value = db.name === 'Гость' ? '' : db.name;
+  $('#nameDlg').returnValue = '';
   $('#nameDlg').showModal();
 };
 
@@ -786,6 +940,65 @@ $('#nameDlg').addEventListener('close', () => {
   paintUser();
   toast(`Готово, ${v}. Твои результаты теперь под этим именем.`);
   if (!state.session && !state.duel) route();
+});
+
+const form = $('#addForm'), field = n => form.elements.namedItem(n);
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('[data-add]')) return;
+  form.reset();
+  $$('.file', form).forEach(l => {
+    l.classList.remove('picked');
+    l.querySelector('span').textContent = l.dataset.hint;
+  });
+  setText($('#addNote'), '');
+  $('#addDlg').returnValue = '';
+  $('#addDlg').showModal();
+});
+
+$$('.file input', form).forEach(inp => inp.addEventListener('change', () => {
+  const l = inp.closest('.file'), f = inp.files[0];
+  l.classList.toggle('picked', !!f);
+  l.querySelector('span').textContent = f ? f.name : l.dataset.hint;
+}));
+
+$('#findLrc').onclick = async () => {
+  const title = field('title').value.trim(), artist = field('artist').value.trim();
+  if (!title) return setText($('#addNote'), 'Сначала впиши название и исполнителя.');
+  setText($('#addNote'), 'Ищу текст…');
+  const lrc = await Songs.findLyrics(title, artist);
+  if (lrc) field('lrc').value = lrc;
+  setText($('#addNote'), lrc
+    ? `Нашёл текст: ${Songs.parseLrc(lrc).filter(l => l.text).length} строк с таймингом.`
+    : 'Текст не нашёлся. Вставь его вручную или пой без текста.');
+};
+
+$('#addDlg').addEventListener('close', async () => {
+  if ($('#addDlg').returnValue !== 'ok') return;
+  const file = n => field(n).files[0] || null;
+  try {
+    const t = await Songs.add({
+      title: field('title').value.trim(), artist: field('artist').value.trim(),
+      plus: file('plus'), minus: file('minus'), cover: file('cover'),
+      lrc: field('lrc').value.trim(), length: +field('span').value
+    });
+    LIST.push(t);
+    location.hash = `#/sing/${t.id}`;
+  } catch (e) {
+    toast(`Не получилось сохранить песню: ${e.message}`);
+  }
+});
+
+Songs.load().then(list => {
+  if (!list.length) return;
+  LIST.push(...list);
+  if (!state.session && !state.duel) route();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Space' || !state.session || state.session.demo || e.target.closest('input, textarea, select, button, [contenteditable]')) return;
+  e.preventDefault();
+  togglePause();
 });
 
 addEventListener('hashchange', route);

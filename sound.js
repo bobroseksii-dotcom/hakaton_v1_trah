@@ -1,7 +1,7 @@
 const Sound = (() => {
   const PC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
   const NAMES = ['До', 'До♯', 'Ре', 'Ре♯', 'Ми', 'Фа', 'Фа♯', 'Соль', 'Соль♯', 'Ля', 'Ля♯', 'Си'];
-  let ctx, noise, stream, analyser, buf, diff, rec, chunks;
+  let ctx, noise, stream, analyser, buf, diff, rec, chunks, gate = 0.012;
 
   const toMidi = s => {
     const [, l, acc, oct] = s.match(/^([A-G])([#b]?)(\d)$/);
@@ -28,7 +28,7 @@ const Sound = (() => {
   }
 
   function parse(track) {
-    if (track._s) return track._s;
+    if (track._s || track.song) return track._s;
     const beat = 60 / track.bpm, bar = beat * 4, notes = [], lines = [];
     let t = bar;
     track.lines.forEach(([text, seq], li) => {
@@ -54,11 +54,50 @@ const Sound = (() => {
     });
   }
 
-  function play(track, { guide = true } = {}) {
-    const c = context(), S = parse(track), t0 = c.currentTime + 0.1;
+  function bus(c, t0) {
     const out = c.createGain(), comp = c.createDynamicsCompressor();
-    out.gain.value = 0.85;
     out.connect(comp).connect(c.destination);
+    return {
+      out,
+      stop() {
+        out.gain.setTargetAtTime(0, c.currentTime, 0.03);
+        setTimeout(() => out.disconnect(), 400);
+      },
+      fade: (g, on) => g.gain.setTargetAtTime(on ? 1 : 0, Math.max(c.currentTime, t0), 0.04)
+    };
+  }
+
+  function playSong(track, voice) {
+    const c = context(), S = track._s, { plus, minus } = track._buf, t0 = c.currentTime + 0.12, b = bus(c, t0);
+    const src = (buffer, at, on) => {
+      const s = c.createBufferSource(), g = c.createGain();
+      s.buffer = buffer;
+      g.gain.value = on ? 1 : 0;
+      s.connect(g).connect(b.out);
+      s.start(t0, Math.max(0, at), S.duration);
+      return g;
+    };
+    const gp = src(plus, S.from, voice || !minus);
+    const gm = minus && src(minus, S.from + S.lag, !voice);
+    return {
+      t0,
+      stop: b.stop,
+      setVoice(on) {
+        if (!gm) return;
+        b.fade(gp, on);
+        b.fade(gm, !on);
+      }
+    };
+  }
+
+  function play(track, { voice = true, reference = false } = {}) {
+    if (track.song) return playSong(track, voice);
+    const c = context(), S = parse(track), t0 = c.currentTime + 0.1, b = bus(c, t0), out = b.out;
+    const backing = c.createGain(), guide = c.createGain();
+    backing.gain.value = reference ? 0.55 : 0.85;
+    guide.gain.value = voice ? 1 : 0;
+    backing.connect(out);
+    guide.connect(out);
 
     const env = (g, t, d, peak, a = 0.01, r = 0.08) => {
       g.gain.setValueAtTime(0, t);
@@ -66,7 +105,7 @@ const Sound = (() => {
       g.gain.setValueAtTime(peak, Math.max(t + a, t + d - r));
       g.gain.linearRampToValueAtTime(0, t + d);
     };
-    const tone = (type, f, t, d, peak, dest = out, a, r) => {
+    const tone = (type, f, t, d, peak, dest, a, r) => {
       const o = c.createOscillator(), g = c.createGain();
       o.type = type;
       o.frequency.value = f;
@@ -74,6 +113,7 @@ const Sound = (() => {
       o.connect(g).connect(dest);
       o.start(t);
       o.stop(t + d + 0.05);
+      return o;
     };
     const hit = (t, freq, peak, decay) => {
       const s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
@@ -82,7 +122,7 @@ const Sound = (() => {
       f.frequency.value = freq;
       g.gain.setValueAtTime(peak, t);
       g.gain.exponentialRampToValueAtTime(0.001, t + decay);
-      s.connect(f).connect(g).connect(out);
+      s.connect(f).connect(g).connect(backing);
       s.start(t, Math.random() * 0.5);
       s.stop(t + decay + 0.02);
     };
@@ -92,40 +132,53 @@ const Sound = (() => {
       o.frequency.exponentialRampToValueAtTime(42, t + 0.14);
       g.gain.setValueAtTime(0.9, t);
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
-      o.connect(g).connect(out);
+      o.connect(g).connect(backing);
       o.start(t);
       o.stop(t + 0.35);
     };
 
-    const padF = c.createBiquadFilter(), bassF = c.createBiquadFilter();
-    padF.type = bassF.type = 'lowpass';
+    const padF = c.createBiquadFilter(), bassF = c.createBiquadFilter(), voiceF = c.createBiquadFilter();
+    padF.type = bassF.type = voiceF.type = 'lowpass';
     padF.frequency.value = 1100;
     bassF.frequency.value = 420;
-    padF.connect(out);
-    bassF.connect(out);
+    voiceF.frequency.value = 2200;
+    voiceF.Q.value = 1.2;
+    padF.connect(backing);
+    bassF.connect(backing);
+    voiceF.connect(guide);
+    const vib = c.createOscillator(), depth = c.createGain();
+    vib.frequency.value = 5.5;
+    depth.gain.value = 9;
+    vib.connect(depth);
+    vib.start(t0);
+    vib.stop(t0 + S.duration + 0.5);
 
-    for (let b = 0; b < 4; b++) tone('sine', b ? 1100 : 1650, t0 + b * S.beat, 0.06, 0.18);
+    for (let i = 0; i < 4; i++) tone('sine', i ? 1100 : 1650, t0 + i * S.beat, 0.06, 0.18, backing);
     S.chords.forEach((ch, i) => {
       const t = t0 + S.intro + i * S.bar;
       ch.forEach(m => tone('sawtooth', hz(m), t, S.bar, 0.045, padF, 0.25, 0.4));
       [[0, 0.9], [1.5, 0.4], [2, 0.9]].forEach(([at, len]) =>
         tone('sawtooth', hz(ch[0] - 12), t + at * S.beat, len * S.beat, 0.28, bassF));
-      for (let b = 0; b < 4; b++) {
-        const x = t + b * S.beat;
-        b % 2 ? hit(x, 1400, 0.32, 0.16) : kick(x);
+      for (let k = 0; k < 4; k++) {
+        const x = t + k * S.beat;
+        k % 2 ? hit(x, 1400, 0.32, 0.16) : kick(x);
         hit(x, 7500, 0.07, 0.05);
         hit(x + S.beat / 2, 7500, 0.045, 0.04);
       }
     });
-    if (guide) S.notes.forEach(n => tone('triangle', hz(n.midi), t0 + n.t, n.d, 0.32, out, 0.02, 0.06));
+    S.notes.forEach(n => {
+      [-7, 7].forEach(cents => {
+        const o = tone('sawtooth', hz(n.midi), t0 + n.t, n.d, 0.11, voiceF, 0.04, 0.07);
+        o.detune.value = cents;
+        depth.connect(o.detune);
+      });
+    });
 
-    return {
-      t0,
-      stop() {
-        out.gain.setTargetAtTime(0, c.currentTime, 0.03);
-        setTimeout(() => out.disconnect(), 400);
-      }
-    };
+    return { t0, stop: b.stop, setVoice: on => b.fade(guide, on) };
+  }
+
+  async function decode(data) {
+    return context().decodeAudioData(data instanceof Blob ? await data.arrayBuffer() : data);
   }
 
   async function micOn() {
@@ -133,7 +186,7 @@ const Sound = (() => {
     if (stream) return;
     if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error('insecure'), { name: 'InsecureError' });
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true }
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     });
     analyser = ctx.createAnalyser();
     analyser.fftSize = 2048;
@@ -147,23 +200,23 @@ const Sound = (() => {
     stream = analyser = null;
   }
 
-  function yin(x, sr) {
-    const W = x.length >> 1, min = Math.floor(sr / 1100), max = Math.min(W - 2, Math.floor(sr / 70));
+  function yin(x, sr, off, W, d, limit = 0.15) {
+    const min = Math.floor(sr / 1100), max = Math.min(W - 2, Math.floor(sr / 70));
     let sum = 0;
     for (let tau = 1; tau <= max + 1; tau++) {
       let s = 0;
-      for (let i = 0; i < W; i++) {
+      for (let i = off, e = off + W; i < e; i++) {
         const v = x[i] - x[i + tau];
         s += v * v;
       }
       sum += s;
-      diff[tau] = (s * tau) / (sum || 1);
+      d[tau] = (s * tau) / (sum || 1);
     }
     let tau = min;
-    while (tau <= max && diff[tau] >= 0.15) tau++;
+    while (tau <= max && d[tau] >= limit) tau++;
     if (tau > max) return 0;
-    while (tau < max && diff[tau + 1] < diff[tau]) tau++;
-    const a = diff[tau - 1], b = diff[tau], c = diff[tau + 1], den = a + c - 2 * b;
+    while (tau < max && d[tau + 1] < d[tau]) tau++;
+    const a = d[tau - 1], b = d[tau], c = d[tau + 1], den = a + c - 2 * b;
     return sr / (tau + (den ? (a - c) / (2 * den) : 0));
   }
 
@@ -173,14 +226,13 @@ const Sound = (() => {
     let rms = 0;
     for (const v of buf) rms += v * v;
     rms = Math.sqrt(rms / buf.length);
-    if (rms < 0.01) return { m: null, rms };
-    const f = yin(buf, ctx.sampleRate);
+    if (rms < gate) return { m: null, rms };
+    const f = yin(buf, ctx.sampleRate, 0, buf.length >> 1, diff);
     return { m: f ? 69 + 12 * Math.log2(f / 440) : null, rms };
   }
 
-  function latency() {
-    return (ctx?.outputLatency || 0) + (ctx?.baseLatency || 0) + 0.04;
-  }
+  const setGate = v => (gate = Math.min(0.06, Math.max(0.012, v)));
+  const latency = () => (ctx?.outputLatency || 0) + (ctx?.baseLatency || 0) + 0.04;
 
   function recStart() {
     if (!stream || !window.MediaRecorder) return;
@@ -188,6 +240,17 @@ const Sound = (() => {
     rec = new MediaRecorder(stream);
     rec.ondataavailable = e => chunks.push(e.data);
     rec.start();
+  }
+
+  async function pause(on) {
+    if (!ctx) return;
+    if (on) {
+      if (rec?.state === 'recording') rec.pause();
+      await ctx.suspend();
+    } else {
+      await ctx.resume();
+      if (rec?.state === 'paused') rec.resume();
+    }
   }
 
   function recStop() {
@@ -198,5 +261,5 @@ const Sound = (() => {
     });
   }
 
-  return { context, parse, play, micOn, micOff, pitch, latency, recStart, recStop, noteName };
+  return { context, parse, play, decode, micOn, micOff, pitch, setGate, yin, latency, recStart, recStop, pause, noteName };
 })();
